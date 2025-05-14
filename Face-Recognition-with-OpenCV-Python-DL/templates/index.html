@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Face Recognition & Emotion Detection</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+            margin: 0;
+            padding: 20px;
+            background-color: #f0f0f0;
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 20px;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: white;
+            border-radius: 10px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+        }
+        #video-container {
+            margin: 20px auto;
+            width: 640px;
+            height: 480px;
+            border: 2px solid #333;
+            background-color: #000;
+            position: relative;
+            overflow: hidden;
+        }
+        #video-feed {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        .controls {
+            margin: 20px 0;
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+        }
+        button {
+            padding: 12px 24px;
+            font-size: 16px;
+            cursor: pointer;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            transition: background-color 0.3s;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        .status {
+            margin: 10px 0;
+            padding: 10px;
+            border-radius: 5px;
+        }
+        .status.error {
+            background-color: #ffebee;
+            color: #c62828;
+        }
+        .status.success {
+            background-color: #e8f5e9;
+            color: #2e7d32;
+        }
+        .loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            font-size: 18px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Face Recognition & Emotion Detection</h1>
+        <div id="video-container">
+            <img id="video-feed" src="" alt="Video Feed">
+            <div id="loading" class="loading">Camera is starting...</div>
+        </div>
+        <div id="status" class="status"></div>
+        <div class="controls">
+            <button id="start-btn">Start Camera</button>
+            <button id="stop-btn" disabled>Stop Camera</button>
+            <button id="capture-btn">Take Photo</button>
+            <button id="train-btn">Train Model</button>
+        </div>
+    </div>
+
+    <!-- Modal chọn folder -->
+    <div id="modal" style="display:none; position:fixed; top:0; left:0; width:100vw; height:100vh; background:rgba(0,0,0,0.5); z-index:1000; align-items:center; justify-content:center;">
+        <div style="background:#fff; padding:20px; border-radius:8px; min-width:300px; max-width:90vw;">
+            <h3>Chọn người chụp hoặc tạo mới</h3>
+            <label for="folder-select">Chọn người:</label>
+            <select id="folder-select"></select>
+            <div style="margin:10px 0;">Hoặc tạo mới:</div>
+            <input type="text" id="new-folder" placeholder="Tên người mới" style="width:100%; padding:6px;">
+            <div style="margin-top:15px; text-align:right;">
+                <button id="save-capture">Lưu ảnh</button>
+                <button id="cancel-modal">Hủy</button>
+            </div>
+            <div id="modal-status" style="margin-top:10px; color:red;"></div>
+        </div>
+    </div>
+
+    <script>
+        const socket = io();
+        const videoFeed = document.getElementById('video-feed');
+        const startBtn = document.getElementById('start-btn');
+        const stopBtn = document.getElementById('stop-btn');
+        const captureBtn = document.getElementById('capture-btn');
+        const trainBtn = document.getElementById('train-btn');
+        const statusDiv = document.getElementById('status');
+        const loadingDiv = document.getElementById('loading');
+        const modal = document.getElementById('modal');
+        const folderSelect = document.getElementById('folder-select');
+        const newFolderInput = document.getElementById('new-folder');
+        const saveCaptureBtn = document.getElementById('save-capture');
+        const cancelModalBtn = document.getElementById('cancel-modal');
+        const modalStatus = document.getElementById('modal-status');
+
+        let lastFrameData = null;
+        let lastRawFrameData = null;
+
+        function showStatus(message, isError = false) {
+            statusDiv.textContent = message;
+            statusDiv.className = 'status ' + (isError ? 'error' : 'success');
+        }
+
+        function setLoading(isLoading) {
+            loadingDiv.style.display = isLoading ? 'block' : 'none';
+        }
+
+        socket.on('connect', () => {
+            showStatus('Connected to server');
+        });
+
+        socket.on('disconnect', () => {
+            showStatus('Disconnected from server', true);
+            setLoading(false);
+            startBtn.disabled = false;
+            stopBtn.disabled = true;
+        });
+
+        socket.on('frame', (data) => {
+            videoFeed.src = 'data:image/jpeg;base64,' + data.image;
+            lastFrameData = videoFeed.src;
+            lastRawFrameData = 'data:image/jpeg;base64,' + data.raw_image;
+            setLoading(false);
+        });
+
+        socket.on('camera_status', (data) => {
+            if (data.status === 'started') {
+                showStatus('Camera started');
+                startBtn.disabled = true;
+                stopBtn.disabled = false;
+            } else if (data.status === 'stopped') {
+                showStatus('Camera stopped');
+                startBtn.disabled = false;
+                stopBtn.disabled = true;
+                videoFeed.src = '';
+            }
+        });
+
+        startBtn.addEventListener('click', () => {
+            setLoading(true);
+            socket.emit('start_camera');
+        });
+
+        stopBtn.addEventListener('click', () => {
+            socket.emit('stop_camera');
+        });
+
+        // Chụp ảnh
+        captureBtn.addEventListener('click', () => {
+            if (!lastRawFrameData) {
+                showStatus('Không có ảnh để chụp!', true);
+                return;
+            }
+            fetch('/list_folders')
+                .then(res => res.json())
+                .then(data => {
+                    folderSelect.innerHTML = '';
+                    data.folders.forEach(f => {
+                        const opt = document.createElement('option');
+                        opt.value = f;
+                        opt.textContent = f;
+                        folderSelect.appendChild(opt);
+                    });
+                    newFolderInput.value = '';
+                    modalStatus.textContent = '';
+                    modal.style.display = 'flex';
+                });
+        });
+
+        saveCaptureBtn.addEventListener('click', () => {
+            let folder = newFolderInput.value.trim() || folderSelect.value;
+            if (!folder) {
+                modalStatus.textContent = 'Vui lòng chọn hoặc nhập tên người!';
+                return;
+            }
+            modalStatus.textContent = 'Đang lưu ảnh...';
+            fetch('/save_image', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ folder: folder, image: lastRawFrameData })
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.success) {
+                    modalStatus.style.color = 'green';
+                    modalStatus.textContent = 'Lưu ảnh thành công!';
+                    setTimeout(() => { modal.style.display = 'none'; }, 800);
+                } else {
+                    modalStatus.style.color = 'red';
+                    modalStatus.textContent = data.message || 'Lỗi lưu ảnh!';
+                }
+            })
+            .catch(() => {
+                modalStatus.style.color = 'red';
+                modalStatus.textContent = 'Lỗi lưu ảnh!';
+            });
+        });
+
+        cancelModalBtn.addEventListener('click', () => {
+            modal.style.display = 'none';
+        });
+
+        // Train model
+        trainBtn.addEventListener('click', () => {
+            showStatus('Training model...');
+            fetch('/train_model', {
+                method: 'POST'
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.success) {
+                    showStatus('Model trained successfully!');
+                } else {
+                    showStatus(data.message || 'Error training model!', true);
+                }
+            })
+            .catch(() => {
+                showStatus('Error training model!', true);
+            });
+        });
+
+        // Handle errors
+        window.onerror = function(msg, url, line) {
+            showStatus(`Error: ${msg}`, true);
+            return false;
+        };
+    </script>
+</body>
+</html> 
